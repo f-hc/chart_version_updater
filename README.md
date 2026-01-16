@@ -163,3 +163,5 @@ make help  # Show all available targets
 ## License
 
 [GNU General Public License v3.0 only](https://spdx.org/licenses/GPL-3.0-only.html)
+
+[![Quality gate](https://sonarcloud.io/api/project_badges/quality_gate?project=f-hc_chart_update_version)](https://sonarcloud.io/summary/new_code?id=f-hc_chart_update_version)
