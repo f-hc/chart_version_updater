@@ -22,7 +22,7 @@ import (
 	"iter"
 )
 
-func logw(w io.Writer, format string, a ...any) {
+func logwf(w io.Writer, format string, a ...any) {
 	_, _ = fmt.Fprintf(w, "▶ "+format+"\n", a...)
 }
 
@@ -38,5 +38,6 @@ func ForEachWithError[T any](seq iter.Seq[T], action func(T) error) error {
 			return err
 		}
 	}
+
 	return nil
 }

@@ -17,6 +17,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -54,7 +55,9 @@ func ParseConfig(args []string, getEnv func(string) string) (Config, error) {
 
 func defaultConfig() Config {
 	return Config{
-		Dir: defaultArgoAppsDir,
+		Dir:       defaultArgoAppsDir,
+		DryRun:    false,
+		CheckOnly: false,
 	}
 }
 
@@ -62,6 +65,7 @@ func applyEnv(cfg Config, getEnv func(string) string) Config {
 	if v := getEnv(argoAppsDirEnvVar); v != "" {
 		cfg.Dir = v
 	}
+
 	return cfg
 }
 
@@ -83,18 +87,21 @@ func parseArgs(cfg Config, args []string) (Config, error) {
 
 	case "--dir", "-d":
 		if len(tail) == 0 {
-			return cfg, fmt.Errorf("--dir requires a directory path")
+			return cfg, errors.New("--dir requires a directory path")
 		}
+
 		cfg.Dir = tail[0]
+
 		return parseArgs(cfg, tail[1:])
 
 	case "--help", "-h":
-		return cfg, fmt.Errorf("help requested")
+		return cfg, errors.New("help requested")
 
 	default:
 		if strings.HasPrefix(head, "-test.") {
 			return parseArgs(cfg, tail)
 		}
+
 		if strings.HasPrefix(head, "-") {
 			return cfg, fmt.Errorf("unknown flag: %s", head)
 		}
@@ -105,7 +112,7 @@ func parseArgs(cfg Config, args []string) (Config, error) {
 
 func validateConfig(cfg Config) (Config, error) {
 	if cfg.DryRun && cfg.CheckOnly {
-		return cfg, fmt.Errorf("--dry-run and --check cannot be used together")
+		return cfg, errors.New("--dry-run and --check cannot be used together")
 	}
 
 	return cfg, nil
@@ -117,8 +124,10 @@ type ChartInfo struct {
 	Repo string // ArtifactHub repository path (e.g., "cilium/cilium")
 }
 
-type DirReader func(name string) ([]os.DirEntry, error)
-type FileStater func(name string) (os.FileInfo, error)
+type (
+	DirReader  func(name string) ([]os.DirEntry, error)
+	FileStater func(name string) (os.FileInfo, error)
+)
 
 // MakeChartDiscoverer creates a function that scans a directory for ArgoCD Application manifests.
 func MakeChartDiscoverer(
@@ -131,6 +140,7 @@ func MakeChartDiscoverer(
 		if err != nil {
 			return nil, fmt.Errorf("cannot access directory: %w", err)
 		}
+
 		if !info.IsDir() {
 			return nil, fmt.Errorf("path is not a directory: %s", dir)
 		}
@@ -178,7 +188,9 @@ func isYamlFile(entry os.DirEntry) bool {
 	if entry.IsDir() {
 		return false
 	}
+
 	name := entry.Name()
+
 	return strings.HasSuffix(name, ".yaml") || strings.HasSuffix(name, ".yml")
 }
 
@@ -188,6 +200,7 @@ func isValidPath(absDir, path string) bool {
 	if err != nil {
 		return false
 	}
+
 	return strings.HasPrefix(absPath, absDir+string(os.PathSeparator)) || absPath == absDir
 }
 
@@ -208,6 +221,7 @@ func relativePath(base, target string) string {
 	if rel, err := filepath.Rel(base, target); err == nil {
 		return rel
 	}
+
 	return target
 }
 
@@ -221,7 +235,7 @@ func extractArtifactHubRepo(readYaml YAMLReader, path string) (string, error) {
 
 	// Filter for Application nodes
 	apps := it.Filter(slices.Values(docs), func(n *yaml.Node) bool {
-		return kind(n) == "Application"
+		return kind(n) == KindApplication
 	})
 
 	// Map to repo strings
@@ -235,5 +249,6 @@ func extractArtifactHubRepo(readYaml YAMLReader, path string) (string, error) {
 	if found {
 		return repo, nil
 	}
+
 	return "", nil
 }

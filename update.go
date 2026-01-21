@@ -17,6 +17,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"slices"
@@ -42,16 +43,18 @@ type UpdateResult struct {
 	Error   error
 }
 
-type YAMLReader func(path string) ([]*yaml.Node, error)
-type YAMLWriter func(path string, docs []*yaml.Node) error
+type (
+	YAMLReader func(path string) ([]*yaml.Node, error)
+	YAMLWriter func(ctx context.Context, path string, docs []*yaml.Node) error
+)
 
 func MakeChartUpdater(
 	cfg Config,
 	read YAMLReader,
 	fetch VersionFetcher,
 	write YAMLWriter,
-) func(file, repo string) UpdateResult {
-	return func(file, repo string) UpdateResult {
+) func(ctx context.Context, file, repo string) UpdateResult {
+	return func(ctx context.Context, file, repo string) UpdateResult {
 		path := filepath.Join(cfg.Dir, file)
 
 		docs, err := read(path)
@@ -64,28 +67,35 @@ func MakeChartUpdater(
 			return newErrorResult(file, repo, fmt.Errorf("failed to read current version in %s", file))
 		}
 
-		latest, err := fetch(repo)
+		latest, err := fetch(ctx, repo)
 		if err != nil {
 			return newErrorResultWithCurrent(file, repo, current, err)
 		}
 
 		if !versionLess(current, latest) {
-			return UpdateResult{File: file, Repo: repo, Current: current, Latest: latest, Status: StatusUpToDate}
+			return UpdateResult{
+				File:    file,
+				Repo:    repo,
+				Current: current,
+				Latest:  latest,
+				Status:  StatusUpToDate,
+				Error:   nil,
+			}
 		}
 
 		updateDocuments(docs, latest)
 
-		if err := write(path, docs); err != nil {
-			return newErrorResultWithVersions(file, repo, current, latest, err)
+		if writeErr := write(ctx, path, docs); writeErr != nil {
+			return newErrorResultWithVersions(file, repo, current, latest, writeErr)
 		}
 
-		return UpdateResult{File: file, Repo: repo, Current: current, Latest: latest, Status: StatusUpdated}
+		return UpdateResult{File: file, Repo: repo, Current: current, Latest: latest, Status: StatusUpdated, Error: nil}
 	}
 }
 
 func findCurrentVersion(docs []*yaml.Node) (string, bool) {
 	n, found := it.Find(slices.Values(docs), func(n *yaml.Node) bool {
-		return kind(n) == "Application"
+		return kind(n) == KindApplication
 	})
 
 	if found {
@@ -97,7 +107,7 @@ func findCurrentVersion(docs []*yaml.Node) (string, bool) {
 
 func updateDocuments(docs []*yaml.Node, version string) {
 	appDocs := it.Filter(slices.Values(docs), func(n *yaml.Node) bool {
-		return kind(n) == "Application"
+		return kind(n) == KindApplication
 	})
 
 	ForEach(appDocs, func(d *yaml.Node) {
@@ -106,11 +116,11 @@ func updateDocuments(docs []*yaml.Node, version string) {
 }
 
 func newErrorResult(file, repo string, err error) UpdateResult {
-	return UpdateResult{File: file, Repo: repo, Status: StatusError, Error: err}
+	return UpdateResult{File: file, Repo: repo, Current: "", Latest: "", Status: StatusError, Error: err}
 }
 
 func newErrorResultWithCurrent(file, repo, current string, err error) UpdateResult {
-	return UpdateResult{File: file, Repo: repo, Current: current, Status: StatusError, Error: err}
+	return UpdateResult{File: file, Repo: repo, Current: current, Latest: "", Status: StatusError, Error: err}
 }
 
 func newErrorResultWithVersions(file, repo, current, latest string, err error) UpdateResult {

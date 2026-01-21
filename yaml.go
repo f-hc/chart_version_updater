@@ -17,6 +17,8 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -25,14 +27,16 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func readYAMLDocuments(path string) (docs []*yaml.Node, err error) {
+func readYAMLDocuments(path string) ([]*yaml.Node, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("open yaml file: %w", err)
 	}
-	defer closeFile(f, &err)
 
-	return decodeStream(yaml.NewDecoder(f))
+	docs, err := decodeStream(yaml.NewDecoder(f))
+	closeFile(f, &err)
+
+	return docs, err
 }
 
 func closeFile(c io.Closer, err *error) {
@@ -44,41 +48,60 @@ func closeFile(c io.Closer, err *error) {
 func decodeStream(dec *yaml.Decoder) ([]*yaml.Node, error) {
 	var n yaml.Node
 	if err := dec.Decode(&n); err != nil {
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			return nil, nil
 		}
-		return nil, err
+
+		return nil, fmt.Errorf("decode yaml: %w", err)
 	}
+
 	rest, err := decodeStream(dec)
 	if err != nil {
 		return nil, err
 	}
+
 	return append([]*yaml.Node{&n}, rest...), nil
 }
 
-func writeYAMLDocuments(path string, docs []*yaml.Node) (err error) {
+const (
+	yamlIndent        = 2
+	mappingNodeStep   = 2
+	artifactHubPrefix = "# artifacthub:"
+	KindApplication   = "Application"
+)
+
+func writeYAMLDocuments(_ context.Context, path string, docs []*yaml.Node) error {
 	f, err := os.Create(path)
 	if err != nil {
-		return err
+		return fmt.Errorf("create yaml file: %w", err)
 	}
-	defer closeFile(f, &err)
+
+	var writeErr error
+	defer closeFile(f, &writeErr)
 
 	enc := yaml.NewEncoder(f)
-	enc.SetIndent(2)
-	defer closeFile(enc, &err)
+
+	enc.SetIndent(yamlIndent)
+	defer closeFile(enc, &writeErr)
 
 	nodes := docs
 	if len(docs) > 0 {
 		first, comment := extractComment(docs[0])
 		if comment != "" {
-			if _, err := fmt.Fprintf(f, "%s\n---\n", comment); err != nil {
-				return err
+			if _, writeErr = fmt.Fprintf(f, "%s\n---\n", comment); writeErr != nil {
+				writeErr = fmt.Errorf("write yaml comment: %w", writeErr)
+				return writeErr
 			}
+
 			nodes = append([]*yaml.Node{first}, docs[1:]...)
 		}
 	}
 
-	return encodeStream(enc, nodes)
+	if writeErr = encodeStream(enc, nodes); writeErr != nil {
+		return writeErr
+	}
+
+	return writeErr
 }
 
 func extractComment(n *yaml.Node) (*yaml.Node, string) {
@@ -111,6 +134,7 @@ func extractComment(n *yaml.Node) (*yaml.Node, string) {
 		newDoc.Content = make([]*yaml.Node, len(n.Content))
 		copy(newDoc.Content, n.Content)
 		newDoc.Content[0] = &newRoot
+
 		return &newDoc, comment
 	}
 
@@ -121,9 +145,11 @@ func encodeStream(enc *yaml.Encoder, docs []*yaml.Node) error {
 	if len(docs) == 0 {
 		return nil
 	}
+
 	if err := enc.Encode(docs[0]); err != nil {
-		return err
+		return fmt.Errorf("encode yaml: %w", err)
 	}
+
 	return encodeStream(enc, docs[1:])
 }
 
@@ -131,6 +157,7 @@ func docRoot(n *yaml.Node) *yaml.Node {
 	if n.Kind == yaml.DocumentNode && len(n.Content) > 0 {
 		return n.Content[0]
 	}
+
 	return n
 }
 
@@ -146,8 +173,6 @@ func setTargetRevision(n *yaml.Node, v string) {
 	set(docRoot(n), v, "spec", "source", "targetRevision")
 }
 
-const artifactHubPrefix = "# artifacthub:"
-
 // getArtifactHubRepo extracts the ArtifactHub repository path from a YAML comment.
 // It looks for a comment in the format "# artifacthub: org/repo" at the top of the file.
 // In yaml.v3, this comment is attached to the first key of the root mapping node.
@@ -157,8 +182,8 @@ func getArtifactHubRepo(n *yaml.Node) string {
 	// The comment is attached to the first key in a mapping node
 	if root.Kind == yaml.MappingNode && len(root.Content) > 0 {
 		firstKey := root.Content[0]
-		if strings.HasPrefix(firstKey.HeadComment, artifactHubPrefix) {
-			return strings.TrimSpace(strings.TrimPrefix(firstKey.HeadComment, artifactHubPrefix))
+		if after, ok := strings.CutPrefix(firstKey.HeadComment, artifactHubPrefix); ok {
+			return strings.TrimSpace(after)
 		}
 	}
 
@@ -169,10 +194,13 @@ func lookup(n *yaml.Node, path ...string) string {
 	if n == nil {
 		return ""
 	}
+
 	if len(path) == 0 {
 		return n.Value
 	}
+
 	head, tail := path[0], path[1:]
+
 	return lookup(mapGet(n, head), tail...)
 }
 
@@ -181,12 +209,15 @@ func set(n *yaml.Node, value string, path ...string) {
 		n.Value = value
 		return
 	}
+
 	head, tail := path[0], path[1:]
+
 	next := mapGet(n, head)
 	if next == nil {
 		next = &yaml.Node{Kind: yaml.MappingNode}
 		mapSet(n, head, next)
 	}
+
 	set(next, value, tail...)
 }
 
@@ -194,18 +225,21 @@ func mapGet(n *yaml.Node, key string) *yaml.Node {
 	if n == nil || n.Kind != yaml.MappingNode {
 		return nil
 	}
+
 	return findInContent(n.Content, key)
 }
 
 func findInContent(content []*yaml.Node, key string) *yaml.Node {
-	if len(content) < 2 {
+	if len(content) < mappingNodeStep {
 		return nil
 	}
+
 	k, v := content[0], content[1]
 	if k.Value == key {
 		return v
 	}
-	return findInContent(content[2:], key)
+
+	return findInContent(content[mappingNodeStep:], key)
 }
 
 func mapSet(n *yaml.Node, key string, val *yaml.Node) {

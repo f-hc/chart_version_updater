@@ -49,6 +49,7 @@ func TestFindLatestStable(t *testing.T) {
 			if found != tt.found {
 				t.Errorf("findLatestStable() found = %v, want %v", found, tt.found)
 			}
+
 			if got != tt.want {
 				t.Errorf("findLatestStable() = %v, want %v", got, tt.want)
 			}

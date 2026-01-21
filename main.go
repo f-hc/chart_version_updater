@@ -17,6 +17,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net/http"
@@ -45,6 +46,7 @@ func run(args []string, getEnv func(string) string, stderr io.Writer) error {
 			printUsage(stderr, programName)
 			return nil
 		}
+
 		return err
 	}
 
@@ -53,6 +55,7 @@ func run(args []string, getEnv func(string) string, stderr io.Writer) error {
 
 func runApp(cfg Config, w io.Writer) error {
 	discover := MakeChartDiscoverer(os.Stat, os.ReadDir, readYAMLDocuments)
+
 	charts, err := discover(cfg.Dir)
 	if err != nil {
 		return err
@@ -71,15 +74,19 @@ func runApp(cfg Config, w io.Writer) error {
 }
 
 func runCheck(charts []ChartInfo, w io.Writer) {
-	logw(w, "discovered %d chart(s) with artifacthub comments:", len(charts))
+	logwf(w, "discovered %d chart(s) with artifacthub comments:", len(charts))
 	ForEach(slices.Values(charts), func(c ChartInfo) {
-		logw(w, "  %s → %s", c.File, c.Repo)
+		logwf(w, "  %s → %s", c.File, c.Repo)
 	})
 }
 
 func runUpdate(cfg Config, charts []ChartInfo, w io.Writer) error {
-	const apiURL = "https://artifacthub.io/api/v1/packages/helm"
-	client := &http.Client{Timeout: 60 * time.Second}
+	const (
+		apiURL            = "https://artifacthub.io/api/v1/packages/helm"
+		httpClientTimeout = 60 * time.Second
+	)
+
+	client := &http.Client{Timeout: httpClientTimeout}
 
 	fetcher := MakeArtifactHubFetcher(apiURL, client)
 
@@ -90,9 +97,11 @@ func runUpdate(cfg Config, charts []ChartInfo, w io.Writer) error {
 
 	updater := MakeChartUpdater(cfg, readYAMLDocuments, fetcher, writer)
 
+	ctx := context.Background()
+
 	// Pipeline: Iterate -> Map(process) -> ForEach(log)
 	process := func(c ChartInfo) UpdateResult {
-		return updater(c.File, c.Repo)
+		return updater(ctx, c.File, c.Repo)
 	}
 
 	return ForEachWithError(it.Map(slices.Values(charts), process), func(result UpdateResult) error {
@@ -107,16 +116,17 @@ func logResult(r UpdateResult, w io.Writer) error {
 
 	switch r.Status {
 	case StatusUpdated:
-		logw(w, "%s: %s → %s", r.File, r.Current, r.Latest)
+		logwf(w, "%s: %s → %s", r.File, r.Current, r.Latest)
 	case StatusUpToDate:
-		logw(w, "%s: already up to date (%s)", r.File, r.Current)
+		logwf(w, "%s: already up to date (%s)", r.File, r.Current)
 	case StatusError:
 		if r.Error != nil {
 			return r.Error
-		} else {
-			return fmt.Errorf("%s: unknown error", r.File)
 		}
+
+		return fmt.Errorf("%s: unknown error", r.File)
 	}
+
 	return nil
 }
 

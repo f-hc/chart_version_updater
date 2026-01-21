@@ -17,6 +17,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -34,16 +35,16 @@ type ArtifactHubVersion struct {
 
 // ArtifactHubResponse represents the API response structure.
 type ArtifactHubResponse struct {
-	AvailableVersions []ArtifactHubVersion `json:"available_versions"`
+	AvailableVersions []ArtifactHubVersion `json:"available_versions"` //nolint:tagliatelle // ArtifactHub API uses snake_case
 }
 
 // VersionFetcher is a function that retrieves the latest version for a repository.
-type VersionFetcher func(repo string) (string, error)
+type VersionFetcher func(ctx context.Context, repo string) (string, error)
 
 // MakeArtifactHubFetcher creates a VersionFetcher that uses the ArtifactHub API.
 func MakeArtifactHubFetcher(apiURL string, client *http.Client) VersionFetcher {
-	return func(repo string) (string, error) {
-		versions, err := fetchVersions(apiURL, client, repo)
+	return func(ctx context.Context, repo string) (string, error) {
+		versions, err := fetchVersions(ctx, apiURL, client, repo)
 		if err != nil {
 			return "", err
 		}
@@ -57,24 +58,26 @@ func MakeArtifactHubFetcher(apiURL string, client *http.Client) VersionFetcher {
 	}
 }
 
-func fetchVersions(apiURL string, client *http.Client, repo string) (versions []string, err error) {
-	resp, err := client.Get(apiURL + "/" + repo)
+func fetchVersions(ctx context.Context, apiURL string, client *http.Client, repo string) ([]string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL+"/"+repo, nil)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("create request: %w", err)
 	}
-	defer func() {
-		if closeErr := resp.Body.Close(); closeErr != nil && err == nil {
-			err = closeErr
-		}
-	}()
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fetch versions from artifacthub: %w", err)
+	}
+
+	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("artifacthub HTTP %d", resp.StatusCode)
 	}
 
 	var data ArtifactHubResponse
-	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
-		return nil, err
+	if decodeErr := json.NewDecoder(resp.Body).Decode(&data); decodeErr != nil {
+		return nil, fmt.Errorf("decode artifacthub response: %w", decodeErr)
 	}
 
 	return slices.Collect(it.Map(slices.Values(data.AvailableVersions), func(v ArtifactHubVersion) string {
@@ -93,9 +96,11 @@ func findLatestStable(versions []string) (string, bool) {
 		if versionLess(a, b) {
 			return -1
 		}
+
 		if versionLess(b, a) {
 			return 1
 		}
+
 		return 0
 	})
 

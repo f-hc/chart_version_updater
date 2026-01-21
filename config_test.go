@@ -53,21 +53,24 @@ func TestDiscoverCharts(t *testing.T) {
 				"app1.yaml": "# artifacthub: org1/chart1\nkind: Application",
 				"app2.yaml": "# artifacthub: org2/chart2\nkind: Application",
 			},
-			wantCount: 2,
+			wantCount:  2,
+			wantCharts: nil,
 		},
 		{
 			name: "file without comment is skipped",
 			files: map[string]string{
 				testAppFile: "kind: Application\nmetadata:\n  name: test",
 			},
-			wantCount: 0,
+			wantCount:  0,
+			wantCharts: nil,
 		},
 		{
 			name: "non-Application kind is skipped",
 			files: map[string]string{
 				"deploy.yaml": "# artifacthub: org/chart\nkind: Deployment",
 			},
-			wantCount: 0,
+			wantCount:  0,
+			wantCharts: nil,
 		},
 		{
 			name: "mixed files",
@@ -76,34 +79,38 @@ func TestDiscoverCharts(t *testing.T) {
 				"deploy.yaml": "kind: Deployment",
 				"secret.yaml": "kind: Secret",
 			},
-			wantCount: 1,
+			wantCount:  1,
+			wantCharts: nil,
 		},
 		{
 			name: "yml extension supported",
 			files: map[string]string{
 				"app.yml": testAppContent,
 			},
-			wantCount: 1,
+			wantCount:  1,
+			wantCharts: nil,
 		},
 		{
 			name: "multi-document with Application",
 			files: map[string]string{
 				testAppFile: testAppContent + "\n---\nkind: Secret",
 			},
-			wantCount: 1,
+			wantCount:  1,
+			wantCharts: nil,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			testDir := filepath.Join(tmpDir, tt.name)
-			if err := os.Mkdir(testDir, 0755); err != nil {
+			if err := os.Mkdir(testDir, 0o750); err != nil {
 				t.Fatal(err)
 			}
 
 			createTestFiles(t, testDir, tt.files)
 
 			discover := MakeChartDiscoverer(os.Stat, os.ReadDir, readYAMLDocuments)
+
 			charts, err := discover(testDir)
 			if err != nil {
 				t.Errorf("discoverCharts() error = %v", err)
@@ -116,27 +123,33 @@ func TestDiscoverCharts(t *testing.T) {
 }
 
 func createTestFiles(t *testing.T, dir string, files map[string]string) {
+	t.Helper()
+
 	for name, content := range files {
 		path := filepath.Join(dir, name)
-		if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
 }
 
 func checkDiscoveredCharts(t *testing.T, got []ChartInfo, wantCount int, wantCharts []ChartInfo) {
+	t.Helper()
+
 	if len(got) != wantCount {
 		t.Errorf("discoverCharts() found %d charts, want %d", len(got), wantCount)
 	}
 
 	for _, want := range wantCharts {
 		found := false
+
 		for _, g := range got {
 			if g.File == want.File && g.Repo == want.Repo {
 				found = true
 				break
 			}
 		}
+
 		if !found {
 			t.Errorf("discoverCharts() missing expected chart %+v", want)
 		}
@@ -155,7 +168,7 @@ func TestDiscoverChartsErrors(t *testing.T) {
 
 	t.Run("path is a file", func(t *testing.T) {
 		tmpFile := filepath.Join(t.TempDir(), "file.yaml")
-		if err := os.WriteFile(tmpFile, []byte("test"), 0644); err != nil {
+		if err := os.WriteFile(tmpFile, []byte("test"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 
@@ -163,6 +176,7 @@ func TestDiscoverChartsErrors(t *testing.T) {
 		if err == nil {
 			t.Error("discoverCharts() error = nil, want error for file path")
 		}
+
 		if !contains(err.Error(), "not a directory") {
 			t.Errorf("discoverCharts() error = %q, want error mentioning 'not a directory'", err.Error())
 		}
@@ -202,7 +216,7 @@ func TestExtractArtifactHubRepo(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			path := filepath.Join(tmpDir, tt.name+".yaml")
-			if err := os.WriteFile(path, []byte(tt.content), 0644); err != nil {
+			if err := os.WriteFile(path, []byte(tt.content), 0o600); err != nil {
 				t.Fatal(err)
 			}
 
@@ -230,9 +244,13 @@ func TestParseConfig(t *testing.T) {
 		{
 			name: "defaults",
 			args: []string{},
+			env:  nil,
 			want: Config{
-				Dir: defaultArgoAppsDir,
+				Dir:       defaultArgoAppsDir,
+				DryRun:    false,
+				CheckOnly: false,
 			},
+			wantErr: false,
 		},
 		{
 			name: "env var override",
@@ -241,15 +259,22 @@ func TestParseConfig(t *testing.T) {
 			},
 			args: []string{},
 			want: Config{
-				Dir: "custom/dir",
+				Dir:       "custom/dir",
+				DryRun:    false,
+				CheckOnly: false,
 			},
+			wantErr: false,
 		},
 		{
 			name: "flag override",
 			args: []string{"--dir", "flag/dir"},
+			env:  nil,
 			want: Config{
-				Dir: "flag/dir",
+				Dir:       "flag/dir",
+				DryRun:    false,
+				CheckOnly: false,
 			},
+			wantErr: false,
 		},
 		{
 			name: "flag overrides env var",
@@ -258,62 +283,99 @@ func TestParseConfig(t *testing.T) {
 			},
 			args: []string{"--dir", "flag/dir"},
 			want: Config{
-				Dir: "flag/dir",
+				Dir:       "flag/dir",
+				DryRun:    false,
+				CheckOnly: false,
 			},
+			wantErr: false,
 		},
 		{
 			name: "dry run short",
 			args: []string{"-n"},
+			env:  nil,
 			want: Config{
-				Dir:    defaultArgoAppsDir,
-				DryRun: true,
+				Dir:       defaultArgoAppsDir,
+				DryRun:    true,
+				CheckOnly: false,
 			},
+			wantErr: false,
 		},
 		{
 			name: "dry run long",
 			args: []string{"--dry-run"},
+			env:  nil,
 			want: Config{
-				Dir:    defaultArgoAppsDir,
-				DryRun: true,
+				Dir:       defaultArgoAppsDir,
+				DryRun:    true,
+				CheckOnly: false,
 			},
+			wantErr: false,
 		},
 		{
 			name: "check short",
 			args: []string{"-C"},
+			env:  nil,
 			want: Config{
 				Dir:       defaultArgoAppsDir,
+				DryRun:    false,
 				CheckOnly: true,
 			},
+			wantErr: false,
 		},
 		{
 			name: "check long",
 			args: []string{"--check"},
+			env:  nil,
 			want: Config{
 				Dir:       defaultArgoAppsDir,
+				DryRun:    false,
 				CheckOnly: true,
 			},
+			wantErr: false,
 		},
 		{
-			name:    "dry run and check incompatible",
-			args:    []string{"--dry-run", "--check"},
+			name: "dry run and check incompatible",
+			args: []string{"--dry-run", "--check"},
+			env:  nil,
+			want: Config{
+				Dir:       defaultArgoAppsDir,
+				DryRun:    true,
+				CheckOnly: true,
+			},
 			wantErr: true,
 		},
 		{
-			name:    "missing dir argument",
-			args:    []string{"--dir"},
+			name: "missing dir argument",
+			args: []string{"--dir"},
+			env:  nil,
+			want: Config{
+				Dir:       defaultArgoAppsDir,
+				DryRun:    false,
+				CheckOnly: false,
+			},
 			wantErr: true,
 		},
 		{
-			name:    "unknown flag",
-			args:    []string{"--unknown"},
+			name: "unknown flag",
+			args: []string{"--unknown"},
+			env:  nil,
+			want: Config{
+				Dir:       defaultArgoAppsDir,
+				DryRun:    false,
+				CheckOnly: false,
+			},
 			wantErr: true,
 		},
 		{
 			name: "ignore test flags",
 			args: []string{"-test.v"},
+			env:  nil,
 			want: Config{
-				Dir: defaultArgoAppsDir,
+				Dir:       defaultArgoAppsDir,
+				DryRun:    false,
+				CheckOnly: false,
 			},
+			wantErr: false,
 		},
 	}
 
@@ -323,6 +385,7 @@ func TestParseConfig(t *testing.T) {
 				if tt.env == nil {
 					return ""
 				}
+
 				return tt.env[key]
 			}
 
@@ -331,6 +394,7 @@ func TestParseConfig(t *testing.T) {
 				t.Errorf("ParseConfig() error = %v, wantErr %v", err, tt.wantErr)
 				return
 			}
+
 			if !tt.wantErr && got != tt.want {
 				t.Errorf("ParseConfig() = %+v, want %+v", got, tt.want)
 			}
@@ -349,5 +413,6 @@ func searchSubstring(s, substr string) bool {
 			return true
 		}
 	}
+
 	return false
 }

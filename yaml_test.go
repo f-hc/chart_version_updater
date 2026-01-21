@@ -17,6 +17,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -38,21 +39,25 @@ func TestReadYAMLDocuments(t *testing.T) {
 			name:     "single document",
 			content:  "key: value",
 			wantDocs: 1,
+			wantErr:  false,
 		},
 		{
 			name:     "multiple documents",
 			content:  "---\nkey1: value1\n---\nkey2: value2",
 			wantDocs: 2,
+			wantErr:  false,
 		},
 		{
 			name:     "empty file",
 			content:  "",
 			wantDocs: 0,
+			wantErr:  false,
 		},
 		{
-			name:    "invalid yaml",
-			content: "key: [invalid",
-			wantErr: true,
+			name:     "invalid yaml",
+			content:  "key: [invalid",
+			wantDocs: 0,
+			wantErr:  true,
 		},
 	}
 
@@ -65,7 +70,9 @@ func TestReadYAMLDocuments(t *testing.T) {
 }
 
 func runReadYAMLDocumentsTest(t *testing.T, path, content string, wantDocs int, wantErr bool) {
-	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+	t.Helper()
+
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -75,6 +82,7 @@ func runReadYAMLDocumentsTest(t *testing.T, path, content string, wantDocs int, 
 		if err == nil {
 			t.Error("readYAMLDocuments() error = nil, want error")
 		}
+
 		return
 	}
 
@@ -113,7 +121,7 @@ func TestWriteYAMLDocuments(t *testing.T) {
 		},
 	}
 
-	err := writeYAMLDocuments(path, []*yaml.Node{doc})
+	err := writeYAMLDocuments(context.Background(), path, []*yaml.Node{doc})
 	if err != nil {
 		t.Errorf("writeYAMLDocuments() error = %v", err)
 		return
@@ -153,7 +161,7 @@ func TestWriteYAMLDocumentsWithArtifactHub(t *testing.T) {
 		},
 	}
 
-	err := writeYAMLDocuments(path, []*yaml.Node{doc})
+	err := writeYAMLDocuments(context.Background(), path, []*yaml.Node{doc})
 	if err != nil {
 		t.Fatalf("writeYAMLDocuments failed: %v", err)
 	}
@@ -189,6 +197,7 @@ spec:
 
 	// Test setTargetRevision
 	setTargetRevision(&doc, "2.0.0")
+
 	got = getTargetRevision(&doc)
 	if got != "2.0.0" {
 		t.Errorf("after setTargetRevision(), getTargetRevision() = %q, want %q", got, "2.0.0")
@@ -241,6 +250,7 @@ func TestDocRoot(t *testing.T) {
 			{Kind: yaml.MappingNode},
 		},
 	}
+
 	root := docRoot(docNode)
 	if root.Kind != yaml.MappingNode {
 		t.Errorf("docRoot() on DocumentNode returned kind %v, want MappingNode", root.Kind)
@@ -248,6 +258,7 @@ func TestDocRoot(t *testing.T) {
 
 	// Test with non-DocumentNode
 	mappingNode := &yaml.Node{Kind: yaml.MappingNode}
+
 	root = docRoot(mappingNode)
 	if root != mappingNode {
 		t.Error("docRoot() on non-DocumentNode should return the same node")
@@ -263,6 +274,7 @@ func TestLookup(t *testing.T) {
 	if err := yaml.Unmarshal([]byte(content), &doc); err != nil {
 		t.Fatal(err)
 	}
+
 	root := docRoot(&doc)
 
 	tests := []struct {
@@ -291,6 +303,7 @@ key2: value2`
 	if err := yaml.Unmarshal([]byte(content), &doc); err != nil {
 		t.Fatal(err)
 	}
+
 	root := docRoot(&doc)
 
 	// Test existing key
@@ -307,6 +320,7 @@ key2: value2`
 
 	// Test on non-mapping node
 	scalarNode := &yaml.Node{Kind: yaml.ScalarNode, Value: "test"}
+
 	node = mapGet(scalarNode, "key")
 	if node != nil {
 		t.Errorf("mapGet on scalar node = %v, want nil", node)

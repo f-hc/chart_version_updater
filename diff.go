@@ -17,17 +17,21 @@
 package main
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 
 	"gopkg.in/yaml.v3"
 )
 
-func showDiffInternal(path string, docs []*yaml.Node) (err error) {
+func showDiffInternal(ctx context.Context, path string, docs []*yaml.Node) (err error) {
 	tmp, err := os.CreateTemp("", "update-version-*.yaml")
 	if err != nil {
-		return err
+		return fmt.Errorf("create temporary file: %w", err)
 	}
+
 	defer func() {
 		if removeErr := os.Remove(tmp.Name()); removeErr != nil && err == nil {
 			err = removeErr
@@ -35,27 +39,33 @@ func showDiffInternal(path string, docs []*yaml.Node) (err error) {
 	}()
 
 	enc := yaml.NewEncoder(tmp)
-	enc.SetIndent(2)
+	enc.SetIndent(yamlIndent)
 
-	if err := encodeStream(enc, docs); err != nil {
-		return err
-	}
-	if err := enc.Close(); err != nil {
-		return err
-	}
-	if err := tmp.Close(); err != nil {
+	if err = encodeStream(enc, docs); err != nil {
 		return err
 	}
 
-	cmd := exec.Command("git", "diff", "--no-index", "--", path, tmp.Name())
+	if err = enc.Close(); err != nil {
+		return fmt.Errorf("close encoder: %w", err)
+	}
+
+	if err = tmp.Close(); err != nil {
+		return fmt.Errorf("close temporary file: %w", err)
+	}
+
+	//nolint:gosec // path is validated to be within base directory in config.go
+	cmd := exec.CommandContext(ctx, "git", "diff", "--no-index", "--", path, tmp.Name())
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
-	if err := cmd.Run(); err != nil {
-		if ee, ok := err.(*exec.ExitError); ok && ee.ExitCode() == 1 {
+	if err = cmd.Run(); err != nil {
+		var ee *exec.ExitError
+		if errors.As(err, &ee) {
 			return nil // git diff returns 1 when files differ
 		}
-		return err
+
+		return fmt.Errorf("run git diff: %w", err)
 	}
+
 	return nil
 }

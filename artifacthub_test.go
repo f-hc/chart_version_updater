@@ -17,6 +17,7 @@
 package main
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -41,6 +42,7 @@ func TestArtifactHubLatestVersion(t *testing.T) {
 			}`,
 			statusCode: http.StatusOK,
 			wantVer:    "2.0.0",
+			wantErr:    false,
 		},
 		{
 			name: "skips pre-release versions",
@@ -53,6 +55,7 @@ func TestArtifactHubLatestVersion(t *testing.T) {
 			}`,
 			statusCode: http.StatusOK,
 			wantVer:    "1.5.0",
+			wantErr:    false,
 		},
 		{
 			name: "only pre-release versions",
@@ -63,24 +66,28 @@ func TestArtifactHubLatestVersion(t *testing.T) {
 				]
 			}`,
 			statusCode: http.StatusOK,
+			wantVer:    "",
 			wantErr:    true,
 		},
 		{
 			name:       "empty versions",
 			response:   `{"available_versions": []}`,
 			statusCode: http.StatusOK,
+			wantVer:    "",
 			wantErr:    true,
 		},
 		{
 			name:       "not found",
 			response:   `{"error": "not found"}`,
 			statusCode: http.StatusNotFound,
+			wantVer:    "",
 			wantErr:    true,
 		},
 		{
 			name:       "invalid json",
 			response:   `<html>error</html>`,
 			statusCode: http.StatusOK,
+			wantVer:    "",
 			wantErr:    true,
 		},
 	}
@@ -93,9 +100,11 @@ func TestArtifactHubLatestVersion(t *testing.T) {
 }
 
 func runArtifactHubTest(t *testing.T, response string, statusCode int, wantVer string, wantErr bool) {
+	t.Helper()
 	// Create test server
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(statusCode)
+
 		if _, err := w.Write([]byte(response)); err != nil {
 			t.Errorf("failed to write response: %v", err)
 		}
@@ -103,12 +112,13 @@ func runArtifactHubTest(t *testing.T, response string, statusCode int, wantVer s
 	defer server.Close()
 
 	fetcher := MakeArtifactHubFetcher(server.URL, http.DefaultClient)
-	ver, err := fetcher("test/repo")
+	ver, err := fetcher(context.Background(), "test/repo")
 
 	if wantErr {
 		if err == nil {
 			t.Error("artifactHubLatestVersion() error = nil, want error")
 		}
+
 		return
 	}
 

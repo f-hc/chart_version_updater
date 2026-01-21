@@ -28,12 +28,13 @@ import (
 func versionLess(a, b string) bool {
 	as := strings.Split(a, ".")
 	bs := strings.Split(b, ".")
-	limit := max(len(as), len(bs))
+	//nolint:gosec // lengths of slices are non-negative, overflow is not possible here
+	limit := uint(max(len(as), len(bs)))
 
 	seqA := it.Chain(slices.Values(as), it.Repeat("0"))
 	seqB := it.Chain(slices.Values(bs), it.Repeat("0"))
 
-	valA, valB, found := it.Find2(it.Take2(it.Zip(seqA, seqB), uint(limit)), func(a, b string) bool {
+	valA, valB, found := it.Find2(it.Take2(it.Zip(seqA, seqB), limit), func(a, b string) bool {
 		return toInt(a) != toInt(b)
 	})
 
